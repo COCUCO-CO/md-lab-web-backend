@@ -1,0 +1,148 @@
+name: Build and deploy backend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release tag + GitHub Release after a green deploy
+
+concurrency:
+  group: backend-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build ARM64 image, deploy to ECS Fargate, release
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so `git describe` can find previous tags
+
+      - name: Compute release version (auto-bump patch; first deploy is v0.1.0)
+        id: version
+        run: |
+          set -euo pipefail
+          LAST="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -z "$LAST" ]; then
+            VERSION="v0.1.0"
+          else
+            X="${LAST#v}"
+            MAJOR="${X%%.*}"; REST="${X#*.}"
+            MINOR="${REST%%.*}"; PATCH="${REST#*.}"
+            VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION (previous: ${LAST:-none})"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        id: awscred
+        with:
+          role-to-assume: arn:aws:iam::346425562059:role/md-lab-web-BackendDeployRole
+          aws-region: us-east-1
+
+      - name: Read deploy coordinates from SSM
+        id: coords
+        run: |
+          set -euo pipefail
+          JSON="$(aws ssm get-parameter --name /md-lab-web/prod/backend-deploy \
+                    --with-decryption --query 'Parameter.Value' --output text)"
+          echo "cluster=$(echo "$JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["cluster"])')" >> "$GITHUB_OUTPUT"
+          echo "subnets=$(echo "$JSON" | python3 -c 'import sys,json;print(",".join(json.load(sys.stdin)["subnets"]))')" >> "$GITHUB_OUTPUT"
+          echo "security_group=$(echo "$JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["security_group"])')" >> "$GITHUB_OUTPUT"
+          echo "target_group=$(echo "$JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["target_group"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to ECR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.awscred.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com
+          ecr: true
+
+      - name: Build and push ARM64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ steps.awscred.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com/md-lab-web-backend:${{ github.sha }}
+            ${{ steps.awscred.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com/md-lab-web-backend:${{ steps.version.outputs.version }}
+          build-args: |
+            MDLAB_VERSION=${{ steps.version.outputs.version }}
+            GIT_SHA=${{ github.sha }}
+
+      - name: Register task definition and deploy to ECS
+        env:
+          ECR_URI: ${{ steps.awscred.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com/md-lab-web-backend
+        run: |
+          set -euo pipefail
+          ACCOUNT="${{ steps.awscred.outputs.account_id }}"
+
+          sed -e "s|__IMAGE__|${ECR_URI}:${GITHUB_SHA}|" \
+              -e "s|__EXECUTION_ROLE__|arn:aws:iam::${ACCOUNT}:role/md-lab-web-BackendTaskExecutionRole|" \
+              -e "s|__TASK_ROLE__|arn:aws:iam::${ACCOUNT}:role/md-lab-web-BackendTaskRole|" \
+              task-definition.json > "task-definition-${GITHUB_SHA:0:7}.json"
+
+          NEW_REVISION="$(aws ecs register-task-definition \
+            --cli-input-json "file://task-definition-${GITHUB_SHA:0:7}.json" \
+            --query 'taskDefinition.revision' --output text)"
+          echo "Registered task definition revision ${NEW_REVISION}"
+
+          CLUSTER="${{ steps.coords.outputs.cluster }}"
+          if aws ecs describe-services --cluster "$CLUSTER" --services md-lab-web-backend >/dev/null 2>&1; then
+            aws ecs update-service --cluster "$CLUSTER" --service md-lab-web-backend \
+              --task-definition "md-lab-web-backend:${NEW_REVISION}"
+          else
+            # First deploy: create the service (subsequent deploys use update-service).
+            aws ecs create-service \
+              --cluster "$CLUSTER" \
+              --service-name md-lab-web-backend \
+              --task-definition "md-lab-web-backend:${NEW_REVISION}" \
+              --desired-count 1 \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${{ steps.coords.outputs.subnets }}],securityGroups=[${{ steps.coords.outputs.security_group }}],assignPublicIp=disabled}" \
+              --load-balancers "targetGroupArn=${{ steps.coords.outputs.target_group }},containerName=backend,containerPort=8080" \
+              --deployment-circuit-breaker enable=true roll-back=true
+          fi
+
+          aws ecs wait services-stable --cluster "$CLUSTER" --services md-lab-web-backend
+          echo "Service is stable with the new task definition."
+
+      - name: Smoke test through CloudFront
+        run: |
+          set -euo pipefail
+          echo "--- /api/health ---"
+          curl -fsS https://cerebrito.space/api/health
+          echo
+          echo "--- /api/version ---"
+          VERSION_JSON="$(curl -fsS https://cerebrito.space/api/version)"
+          echo "$VERSION_JSON"
+          echo "$VERSION_JSON" | grep -q "\"version\":\"${{ steps.version.outputs.version }}\"" \
+            || { echo "ERROR: deployed version does not match release ${{ steps.version.outputs.version }}"; exit 1; }
+          echo "Smoke test passed."
+
+      - name: Create GitHub release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          {
+            echo "Deployed to https://cerebrito.space/api"
+            echo
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Image: md-lab-web-backend:${GITHUB_SHA} (linux/arm64)"
+            echo "- ECS: Fargate ARM64, cluster md-lab-web"
+          } > release-notes.md
+          gh release create "$VERSION" \
+            --target main \
+            --title "Backend ${VERSION}" \
+            --notes-file release-notes.md

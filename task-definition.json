@@ -1,0 +1,29 @@
+{
+  "family": "md-lab-web-backend",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "networkMode": "awsvpc",
+  "executionRoleArn": "__EXECUTION_ROLE__",
+  "taskRoleArn": "__TASK_ROLE__",
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "ARM64"
+  },
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "__IMAGE__",
+      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+      "environment": [{ "name": "PORT", "value": "8080" }],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/md-lab-web/backend",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "backend"
+        }
+      }
+    }
+  ]
+}

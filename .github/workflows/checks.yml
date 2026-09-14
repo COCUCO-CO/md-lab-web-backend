@@ -1,0 +1,42 @@
+name: Backend checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: fmt + clippy + tests + audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Security audit (advisory DB)
+        run: |
+          set -euo pipefail
+          AUDIT_URL="https://github.com/rustsec/cargo-audit/releases/latest/download/cargo-audit-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$AUDIT_URL" | tar xz -C /usr/local/bin cargo-audit
+          cargo audit
