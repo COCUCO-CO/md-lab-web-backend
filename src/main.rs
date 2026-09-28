@@ -1,14 +1,25 @@
 //! MD Lab web backend — HTTP server entrypoint.
 
 use std::net::SocketAddr;
+use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+    // Keep the guard alive: dropping it flushes pending events and disables
+    // capture. None when SENTRY_DSN is unset (local dev / tests).
+    let _sentry_guard = md_lab_web_backend::init_sentry();
+
+    // Registry with two layers: the human-readable fmt output (filtered by
+    // RUST_LOG) and the Sentry tracing layer, which records spans as Sentry
+    // spans/transactions and error-level events as issues.
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            ),
         )
+        .with(sentry::integrations::tracing::layer())
         .init();
 
     let port: u16 = std::env::var("PORT")

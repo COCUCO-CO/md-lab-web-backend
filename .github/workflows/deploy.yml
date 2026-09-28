@@ -81,6 +81,9 @@ jobs:
       - name: Register task definition and deploy to ECS
         env:
           ECR_URI: ${{ steps.awscred.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com/md-lab-web-backend
+          # Non-secret Actions variable (the DSN is a public endpoint key, not
+          # a secret). Unset/empty -> the backend runs with Sentry disabled.
+          SENTRY_DSN: ${{ vars.SENTRY_DSN_BACKEND }}
         run: |
           set -euo pipefail
           ACCOUNT="${{ steps.awscred.outputs.account_id }}"
@@ -88,6 +91,7 @@ jobs:
           sed -e "s|__IMAGE__|${ECR_URI}:${GITHUB_SHA}|" \
               -e "s|__EXECUTION_ROLE__|arn:aws:iam::${ACCOUNT}:role/md-lab-web-BackendTaskExecutionRole|" \
               -e "s|__TASK_ROLE__|arn:aws:iam::${ACCOUNT}:role/md-lab-web-BackendTaskRole|" \
+              -e "s|__SENTRY_DSN__|${SENTRY_DSN}|" \
               task-definition.json > "task-definition-${GITHUB_SHA:0:7}.json"
 
           NEW_REVISION="$(aws ecs register-task-definition \

@@ -26,7 +26,9 @@ Nothing is deployed; a PR must be green before merge.
 3. Read deploy coordinates from SSM /md-lab-web/prod/backend-deploy
 4. Build linux/arm64 image (buildx; x86 builder cross-compiles — no QEMU)
      tags: <ecr>/<sha>  and  <ecr>/<version>
-5. Register ECS task definition revision (image = <sha>)
+5. Register ECS task definition revision (image = <sha>; `__SENTRY_DSN__` is
+   substituted from the `SENTRY_DSN_BACKEND` Actions variable — empty value
+   means Sentry stays disabled in the container)
 6. First deploy: ecs create-service · afterwards: ecs update-service
 7. aws ecs wait services-stable
 8. Smoke test through CloudFront:

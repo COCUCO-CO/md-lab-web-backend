@@ -8,6 +8,14 @@
 
 FROM --platform=$BUILDPLATFORM rust:1.98-slim-bookworm AS builder
 RUN rustup target add aarch64-unknown-linux-musl
+# ring (pulled by sentry -> rustls) compiles a little C for the target. Debian
+# ships no musl cross-toolchain, so use the prebuilt musl.cc one (same
+# approach as the cross-rs project). Only the compiler is needed, not the libc
+# headers (rust provides musl's).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | tar -xz -C /opt \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
@@ -19,9 +27,10 @@ ARG GIT_SHA=unknown
 ENV MDLAB_VERSION=${MDLAB_VERSION} \
     GIT_SHA=${GIT_SHA}
 
-# rust-lld (shipped with the toolchain) links the static musl binary directly,
-# so no system cross-toolchain is required.
-RUN RUSTFLAGS="-C linker=rust-lld" \
+# rust-lld (shipped with the toolchain) links the static musl binary directly.
+# CC_aarch64_unknown_linux_musl points ring's C build at the musl.cc cross gcc.
+RUN CC_aarch64_unknown_linux_musl=/opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc \
+    RUSTFLAGS="-C linker=rust-lld" \
     cargo build --release --target aarch64-unknown-linux-musl
 
 FROM gcr.io/distroless/static-debian12:nonroot

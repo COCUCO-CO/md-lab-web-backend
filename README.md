@@ -8,9 +8,23 @@ CloudFront distribution as the SPA (no CORS, single TLS edge).
 ## Stack
 
 - Rust 1.98 + Axum 0.8 (async HTTP)
+- Sentry (`sentry` 0.49, ureq+rustls transport) — errors, panics, and request
+  spans via `sentry-tracing`. No-op locally without `SENTRY_DSN`.
 - Static musl binary cross-compiled for ARM64 — no runtime dependencies
-- distroless container image (~4 MB)
+- distroless container image (~6 MB)
 - ECS Fargate: 0.25 vCPU / 512 MB, desired count 1
+
+## Environment variables
+
+| Variable            | Required | Effect                                                     |
+| ------------------- | -------- | ---------------------------------------------------------- |
+| `PORT`              | no       | Listen port (default `8080`)                               |
+| `RUST_LOG`          | no       | Log filter (default `info`)                                |
+| `SENTRY_DSN`        | no       | Sentry DSN; empty/unset → Sentry fully disabled (local dev) |
+| `SENTRY_ENVIRONMENT`| no       | `environment` tag on events (default `production`)         |
+
+`MDLAB_VERSION` / `GIT_SHA` are baked in at build time and used as the Sentry
+release (`<version>+<sha>`), the same identity `GET /api/version` reports.
 
 ## Commands
 
