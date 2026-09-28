@@ -15,7 +15,10 @@
       "name": "backend",
       "image": "__IMAGE__",
       "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
-      "environment": [{ "name": "PORT", "value": "8080" }],
+      "environment": [
+        { "name": "PORT", "value": "8080" },
+        { "name": "SENTRY_DSN", "value": "__SENTRY_DSN__" }
+      ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {

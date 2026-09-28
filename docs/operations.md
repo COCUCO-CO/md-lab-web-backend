@@ -9,7 +9,24 @@
 | ALB health          | EC2 → Load Balancers → `md-lab-web-api` → Target groups               |
 | ECR images + scans  | ECR → `md-lab-web-backend` (scan on push enabled)                     |
 | Releases            | GitHub → `md-lab-web-backend` → Releases                              |
+| Backend errors      | Sentry → `md-lab-backend` project (Issues: panics, handler errors)   |
 | Public behavior     | `https://cerebrito.space/api/health`, `/api/version`, `/api/pipeline` |
+
+## Debugging backend problems
+
+Sentry (project `md-lab-backend`) captures:
+
+- **Panic issues** — the default panic hook reports every panic with the Rust
+  backtrace (debug images make frames meaningful).
+- **Request spans/transactions** — each `/api/*` handler runs under a
+  `tracing` span (`#[tracing::instrument]`); with `traces_sample_rate = 1.0`
+  every request is a Sentry transaction. Browser-side traces are linked to
+  them via trace propagation (`/api/` is a propagation target in the SPA).
+- **Release** = `<MDLAB_VERSION>+<GIT_SHA>`, matching `/api/version`, so an
+  issue maps straight to the release/deploy that shipped it.
+
+AI agents (p coding agent) can query issues, events, and traces through the
+Sentry MCP server (https://mcp.sentry.dev).
 
 ## Day-2 commands
 
